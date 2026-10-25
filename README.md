@@ -17,7 +17,7 @@ Calorie target: Mifflin-St Jeor times an activity factor, minus 750 kcal, floor 
 - `public/index.html`: the whole app (one file, no build step), installable as a home-screen app
 - `api/auth.js`: passcode login, signed HttpOnly cookie
 - `api/data.js`: reads and writes JSON documents in a private Vercel Blob store
-- `api/estimate.js`: calls the Anthropic Messages API from the server and logs token usage per day
+- `api/estimate.js`: calls the model from the server (Gemini, Groq, OpenRouter or Anthropic, chosen by `LLM_PROVIDER`) and logs token usage per day
 
 ## Environment variables
 
@@ -27,9 +27,10 @@ See `.env.example`.
 | --- | --- |
 | `APP_PASSCODE` | Passcode for the login screen |
 | `SESSION_SECRET` | Random string that signs the login cookie |
-| `ANTHROPIC_API_KEY` | Key from console.anthropic.com |
+| `LLM_PROVIDER` | `gemini` (default), `groq`, `openrouter` or `anthropic` |
+| `GEMINI_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` | Key for the chosen provider |
+| `LLM_MODEL`, `LLM_MODEL_QUICK` | Optional model overrides |
 | `BLOB_READ_WRITE_TOKEN` | Added when a Blob store is connected to the project |
-| `ANTHROPIC_MODEL`, `ANTHROPIC_MODEL_QUICK` | Optional model overrides |
 
 ## Deploy
 
@@ -49,4 +50,4 @@ vercel dev
 
 ## Before charging anyone
 
-This version is for one person. To sell it you need real accounts (email or phone login), a database with per-user rows, payments (Razorpay or Stripe), rate limits and cost caps per user, and health-data compliance (India DPDP, GDPR if you serve the EU). Keep the Anthropic key on the server only.
+This version is for one person. To sell it you need real accounts (email or phone login), a database with per-user rows, payments (Razorpay or Stripe), rate limits and cost caps per user, and health-data compliance (India DPDP, GDPR if you serve the EU). Keep provider keys on the server only.

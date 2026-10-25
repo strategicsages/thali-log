@@ -526,7 +526,7 @@ function reportText(){
 }
 function errText(e){
   const c = e?.code;
-  if (c === "no_key" || c === "bad_key") return "The server has no working Anthropic API key. Add it in Vercel and redeploy.";
+  if (c === "no_key" || c === "bad_key") return "The server has no working AI key. Add it in Vercel and redeploy.";
   if (c === "unauthorized") return "You were signed out. Sign in and try again.";
   if (c === "rate_limited") return "Too many estimates in a short time. Wait a minute, then try again.";
   if (c === "image_rejected") return "That photo couldn’t be read. Try a different one.";

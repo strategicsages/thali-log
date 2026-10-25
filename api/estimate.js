@@ -16,10 +16,75 @@ async function logUsage(day, usage) {
   } catch (e) { console.error("usage log failed", e && e.message); }
 }
 
+const PROVIDERS = {
+  gemini: { key: "GEMINI_API_KEY", model: "gemini-2.5-flash", quick: "gemini-2.5-flash-lite" },
+  groq: { key: "GROQ_API_KEY", model: "meta-llama/llama-4-scout-17b-16e-instruct", quick: "meta-llama/llama-4-scout-17b-16e-instruct", base: "https://api.groq.com/openai/v1" },
+  openrouter: { key: "OPENROUTER_API_KEY", model: "meta-llama/llama-4-scout:free", quick: "meta-llama/llama-4-scout:free", base: "https://openrouter.ai/api/v1" },
+  anthropic: { key: "ANTHROPIC_API_KEY", model: "claude-sonnet-5-5", quick: "claude-haiku-5-5" },
+};
+
+async function callModel(provider, model, prompt, images) {
+  const cfg = PROVIDERS[provider];
+  const key = process.env[cfg.key];
+  if (provider === "gemini") {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [...images.map((im) => ({ inline_data: { mime_type: im.media_type, data: im.data } })), { text: prompt }] }],
+        generationConfig: { maxOutputTokens: 4000, temperature: 0.3 },
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { status: r.status, body: j };
+    const c = j.candidates?.[0];
+    return {
+      text: (c?.content?.parts || []).map((x) => x.text || "").join(""),
+      truncated: c?.finishReason === "MAX_TOKENS",
+      usage: { in: j.usageMetadata?.promptTokenCount || 0, out: j.usageMetadata?.candidatesTokenCount || 0 },
+    };
+  }
+  if (provider === "anthropic") {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model, max_tokens: 2000,
+        messages: [{ role: "user", content: [...images.map((im) => ({ type: "image", source: { type: "base64", media_type: im.media_type, data: im.data } })), { type: "text", text: prompt }] }],
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { status: r.status, body: j };
+    return {
+      text: (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join(""),
+      truncated: j.stop_reason === "max_tokens",
+      usage: { in: j.usage?.input_tokens || 0, out: j.usage?.output_tokens || 0 },
+    };
+  }
+  const r = await fetch(cfg.base + "/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer " + key },
+    body: JSON.stringify({
+      model, max_tokens: 2000, temperature: 0.3,
+      messages: [{ role: "user", content: [...images.map((im) => ({ type: "image_url", image_url: { url: `data:${im.media_type};base64,${im.data}` } })), { type: "text", text: prompt }] }],
+    }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return { status: r.status, body: j };
+  return {
+    text: j.choices?.[0]?.message?.content || "",
+    truncated: j.choices?.[0]?.finish_reason === "length",
+    usage: { in: j.usage?.prompt_tokens || 0, out: j.usage?.completion_tokens || 0 },
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return send(res, 405, { error: "method" });
   if (!isAuthed(req)) return send(res, 401, { error: "unauthorized" });
-  if (!process.env.ANTHROPIC_API_KEY) return send(res, 500, { error: "no_key" });
+  const provider = (process.env.LLM_PROVIDER || "gemini").toLowerCase();
+  const cfg = PROVIDERS[provider];
+  if (!cfg) return send(res, 500, { error: "bad_provider" });
+  if (!process.env[cfg.key]) return send(res, 500, { error: "no_key" });
 
   const { prompt, images = [], tier = "default", day } = req.body || {};
   if (typeof prompt !== "string" || !prompt || prompt.length > 40000) return send(res, 400, { error: "bad_prompt" });
@@ -29,36 +94,19 @@ export default async function handler(req, res) {
   }
 
   const model = tier === "quick"
-    ? process.env.ANTHROPIC_MODEL_QUICK || "claude-haiku-5-5"
-    : process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
-  const content = [
-    ...images.map((im) => ({ type: "image", source: { type: "base64", media_type: im.media_type, data: im.data } })),
-    { type: "text", text: prompt },
-  ];
+    ? process.env.LLM_MODEL_QUICK || process.env.LLM_MODEL || cfg.quick
+    : process.env.LLM_MODEL || cfg.model;
 
-  let r;
-  try {
-    r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: "user", content }] }),
-    });
-  } catch (e) {
-    return send(res, 502, { error: "network" });
-  }
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    console.error("anthropic error", r.status, JSON.stringify(j).slice(0, 300));
-    if (r.status === 429) return send(res, 429, { error: "rate_limited" });
-    if (r.status === 401) return send(res, 500, { error: "bad_key" });
-    if (r.status === 400 && images.length) return send(res, 400, { error: "image_rejected" });
+  let out;
+  try { out = await callModel(provider, model, prompt, images); }
+  catch (e) { return send(res, 502, { error: "network" }); }
+  if (out.status) {
+    console.error("llm error", provider, out.status, JSON.stringify(out.body).slice(0, 300));
+    if (out.status === 429) return send(res, 429, { error: "rate_limited" });
+    if (out.status === 401 || out.status === 403) return send(res, 500, { error: "bad_key" });
+    if (out.status === 400 && images.length) return send(res, 400, { error: "image_rejected" });
     return send(res, 502, { error: "upstream" });
   }
-  const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-  await logUsage(/^\d{4}-\d{2}-\d{2}$/.test(day || "") ? day : new Date().toISOString().slice(0, 10), j.usage);
-  return send(res, 200, { text, truncated: j.stop_reason === "max_tokens", model });
+  await logUsage(/^\d{4}-\d{2}-\d{2}$/.test(day || "") ? day : new Date().toISOString().slice(0, 10), { input_tokens: out.usage.in, output_tokens: out.usage.out });
+  return send(res, 200, { text: out.text, truncated: out.truncated, model, provider });
 }
