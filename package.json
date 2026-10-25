@@ -1,0 +1,9 @@
+{
+  "name": "thali-log",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Thali Log: calorie and protein tracker for Indian vegetarian food",
+  "engines": { "node": "22.x" },
+  "dependencies": { "@vercel/blob": "^2.8.2" }
+}
